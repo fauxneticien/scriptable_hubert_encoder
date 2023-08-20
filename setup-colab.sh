@@ -8,3 +8,4 @@ cp -r scriptable_hubert_encoder/* .
 rm -rf scriptable_hubert_encoder
 # Install dependencies
 pip install torch==2.0.1 torchaudio==2.0.2
+apt-get update && apt-get install -y tree
