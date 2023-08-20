@@ -7,5 +7,9 @@ git clone https://github.com/fauxneticien/scriptable_hubert_encoder.git
 cp -r scriptable_hubert_encoder/* .
 rm -rf scriptable_hubert_encoder
 # Install dependencies
-pip install torch==2.0.1 torchaudio==2.0.2
+pip install torch==2.0.1 torchaudio==2.0.2 gdown
 apt-get update && apt-get install -y tree
+# Get mini-librispeech data
+gdown 1KOwmYkPS5UFKNFDBI7rTbuBrzr_xrRBW
+mkdir -p data/mini-librispeech
+tar -xzf mini-librispeech.tgz -C data/mini-librispeech
