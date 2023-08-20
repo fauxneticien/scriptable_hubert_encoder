@@ -474,3 +474,132 @@ def _get_encoder(
         layer_drop=layer_drop,
     )
     return Encoder(feature_projection, transformer)
+
+def _compute_mask_indices(
+    shape: Tuple[int, int],
+    padding_mask: Optional[Tensor],
+    mask_prob: float,
+    mask_length: int,
+    mask_type: str = "static",
+    mask_other: float = 0.0,
+    min_masks: int = 0,
+    no_overlap: bool = False,
+    min_space: int = 0,
+) -> Tensor:
+    """Computes random mask spans for a given shape.
+    Args:
+        shape (int, int): The shape for which to compute masks.
+            The first element is batch size and second is the number of frames.
+        padding_mask (Tensor or None): The padding mask of the same dimension as shape,
+            which will prevent masking padded elements.
+        mask_prob (float): Probability for each token to be chosen as start of the span to be masked.
+            This will be multiplied by number of timesteps divided by length of mask span to mask
+            approximately this percentage of all elements. However due to overlaps, the actual number
+            will be smaller (unless no_overlap is True).
+        mask_type (str): How to compute mask lengths. Options: [``static``, ``uniform``, ``normal``, ``poisson``].
+            ``static``: Fixed size
+            ``uniform``: Sample from uniform distribution [mask_other, mask_length*2]
+            ``normal``: Sample from normal distribution with mean ``mask_length`` and stdev ``mask_other``.
+            ``poisson``: Sample from possion distribution with lambda = ``mask_length``.
+        min_masks (int): Minimum number of masked spans.
+        no_overlap (bool): If false, will switch to an alternative recursive algorithm
+            that prevents spans from overlapping.
+        min_space (int): How many frames to keep unmasked between spans (Only used if no_overlap is True).
+
+    Returns:
+        (Tensor): The mask indices of dimension `[batch, frame]`.
+    """
+
+    batch_size, frame = shape
+    mask = torch.full((batch_size, frame), False)
+    # add a random number for probabilistic rounding
+    all_num_mask = int(mask_prob * frame / float(mask_length) + torch.rand(1))
+
+    all_num_mask = max(min_masks, all_num_mask)
+
+    mask_idcs = []
+    for i in range(batch_size):
+        if padding_mask is not None:
+            sz = frame - padding_mask[i].long().sum().item()
+            # add a random number for probabilistic rounding
+            num_mask = int(mask_prob * sz / float(mask_length) + torch.rand(1))
+            num_mask = max(min_masks, num_mask)
+        else:
+            sz = frame
+            num_mask = all_num_mask
+
+        if mask_type == "static":
+            lengths = torch.full((num_mask,), mask_length)
+        elif mask_type == "uniform":
+            lengths = torch.randint(mask_other, mask_length * 2 + 1, size=(num_mask,))
+        elif mask_type == "normal":
+            lengths = torch.normal(mask_length, mask_other, size=(num_mask,))
+            lengths = torch.maximum(torch.ones(1), torch.round(lengths)).int()
+        elif mask_type == "poisson":
+            lengths = torch.poisson(mask_length, size=(num_mask,))
+            lengths = torch.round(lengths).int()
+        else:
+            raise Exception(f"unknown mask selection: {mask_type}")
+
+        if sum(lengths) == 0:
+            lengths[0] = min(mask_length, sz - 1)
+
+        if no_overlap:
+            mask_idc = []
+
+            def arrange(s, e, length, keep_length):
+                span_start = torch.randint(s, e - length, size=(1,))
+                mask_idc.extend(span_start + i for i in range(length))
+
+                new_parts = []
+                if span_start - s - min_space >= keep_length:
+                    new_parts.append((s, span_start - min_space + 1))
+                if e - span_start - keep_length - min_space > keep_length:
+                    new_parts.append((span_start + length + min_space, e))
+                return new_parts
+
+            parts = [(0, sz)]
+            min_length = min(lengths)
+            for length in sorted(lengths, reverse=True):
+                lens = torch.tensor([e - s for s, e in parts], dtype=torch.int)
+                lens[lens < length + min_space] = 0
+                l_sum = lens.sum()
+                if l_sum == 0:
+                    break
+                probs = lens / l_sum
+                c = torch.distributions.categorical.Categorical(probs).sample()
+                s, e = parts.pop(c)
+                parts.extend(arrange(s, e, length, min_length))
+            mask_idc = torch.tensor(mask_idc)
+        else:
+            min_len = min(lengths)
+            if sz - min_len <= num_mask:
+                min_len = sz - num_mask - 1
+
+            mask_idc = torch.randperm(sz - min_len)[:num_mask]
+            mask_idc = torch.tensor(
+                [mask_idc[j] + offset for j in range(len(mask_idc)) for offset in range(lengths[j])]
+            )
+
+        mask_idcs.append(torch.unique(mask_idc[mask_idc < sz]))
+
+    min_len = min([len(m) for m in mask_idcs])
+    for i, mask_idc in enumerate(mask_idcs):
+        if len(mask_idc) > min_len:
+            mask_idc = mask_idc[torch.randperm(len(mask_idc))[:min_len].long()]
+        mask[i, mask_idc] = True
+
+    return mask
+
+def _get_padding_mask(input: Tensor, lengths: Tensor) -> Tensor:
+    """Generate the padding mask given the padded input and the lengths Tensors.
+    Args:
+        input (Tensor): The padded Tensor of dimension `[batch, max_len, frequency]`.
+        lengths (Tensor): The lengths Tensor of dimension `[batch,]`.
+
+    Returns:
+        (Tensor): The padding mask.
+    """
+    batch_size, max_len, _ = input.shape
+    mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths[:, None]
+    return mask
