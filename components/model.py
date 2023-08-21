@@ -1,7 +1,18 @@
+import torch
+
 from . import verbatim_torchaudio as vta
 
+class VanillaTorchAudioEncoder(torch.nn.Module):
+    def __init__(self, **encoder_kwargs):
+        super().__init__()
+        self.encoder = vta._get_encoder(**encoder_kwargs)
+        self.encoder.apply(vta._init_hubert_pretrain_model)
+
+    def forward(self, feats_padded, feat_lens):
+        return self.encoder(feats_padded, feat_lens)
+        
 def get_torchaudio_hubert_pretrain_base_encoder():
-    encoder = vta._get_encoder(
+    encoder = VanillaTorchAudioEncoder(
         in_features=80,
         embed_dim=768,
         dropout_input=0.1,
@@ -17,6 +28,4 @@ def get_torchaudio_hubert_pretrain_base_encoder():
         layer_drop=0.05,
     )
 
-    encoder.apply(vta._init_hubert_pretrain_model)
-
-    return encoder
+    return encoder.encoder

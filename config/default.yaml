@@ -1,0 +1,41 @@
+# Version 0, configure all params in single YAML file for now
+
+warmup_iters: 5
+num_iters: 100
+
+env:
+  # Force use of single GPU if in multi-GPU environment
+  CUDA_VISIBLE_DEVICES: "0"
+
+data:
+  _target_: components._helpers.MiniLibriSpeech
+  train_data_dir: 'data/mini-librispeech/train-clean-5'
+  sampler_kwargs:
+    max_duration: 60
+  dloader_kwargs:
+    num_workers: 8
+
+masking:
+  mask_prob: 0.8
+  mask_length: 10
+  mask_type: static
+  mask_other: 0.0
+  min_masks: 2
+  no_overlap: False
+  min_space: 1
+
+encoder:
+  _target_: components.model.VanillaTorchAudioEncoder
+  in_features: 80
+  embed_dim: 768
+  dropout_input: 0.1
+  pos_conv_kernel: 128
+  pos_conv_groups: 16
+  num_layers: 12
+  num_heads: 12
+  attention_dropout: 0.1
+  ff_interm_features: 3072
+  ff_interm_dropout: 0.0
+  dropout: 0.1
+  layer_norm_first: False
+  layer_drop: 0.05
