@@ -20,19 +20,25 @@ def benchmark(cfg: DictConfig) -> None:
         masking_config = cfg.masking
     )
 
+    total_iters = cfg.num_iters + cfg.warmup_iters
+
     throughput_stats=[]
 
-    for i in tqdm(range(cfg.warmup_iters), dynamic_ncols=True, desc="Running warmup..."):
-        batch = next(iter(data.train_loader))
-        _, _ = model(batch)
+    for i, batch in (pbar := tqdm(enumerate(data.train_loader), desc="Running warmup", total = total_iters)):
 
-    for j in tqdm(range(cfg.num_iters), dynamic_ncols=True, desc="Benchmarking throughput..."):
-        batch = next(iter(data.train_loader))
+        if i == total_iters:
+            break
+
         _, throughput = model(batch)
-        throughput_stats.append(throughput)
+
+        if i == cfg.warmup_iters:
+            pbar.set_description("Benchmarking throughput")
+
+        if i >= cfg.warmup_iters:
+            throughput_stats.append(throughput)
 
     # Calculate average without first warm-up step
-    print(f"Throughput (data samples per second): {np.mean(throughput_stats[cfg.num_iters:]):.2f}")
+    print(f"Throughput (data samples per second): {np.mean(throughput_stats):.2f}")
 
 if __name__ == "__main__":
     benchmark()
