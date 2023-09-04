@@ -1,7 +1,10 @@
-# Version 0, configure all params in single YAML file for now
+defaults:
+  - _self_
+  - encoder: default.yaml
 
 warmup_iters: 5
 num_iters: 100
+output_csv: ???
 
 env:
   # Force use of single GPU if in multi-GPU environment
@@ -14,6 +17,7 @@ data:
     max_duration: 60
   dloader_kwargs:
     num_workers: 8
+    pin_memory: True
 
 masking:
   mask_prob: 0.8
@@ -24,18 +28,21 @@ masking:
   no_overlap: False
   min_space: 1
 
-encoder:
-  _target_: components.model.VanillaTorchAudioEncoder
-  in_features: 80
-  embed_dim: 768
-  dropout_input: 0.1
-  pos_conv_kernel: 128
-  pos_conv_groups: 16
-  num_layers: 12
-  num_heads: 12
-  attention_dropout: 0.1
-  ff_interm_features: 3072
-  ff_interm_dropout: 0.0
-  dropout: 0.1
-  layer_norm_first: False
-  layer_drop: 0.05
+num_pretraining_targets: 512
+
+loss:
+  _target_: components.loss.HuBERTPretrainingLoss
+
+optim:
+  max_lr: 1e-4
+  max_updates: 100_000
+
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: ${optim.max_lr}
+
+  scheduler:
+    _target_: torch.optim.lr_scheduler.OneCycleLR
+    total_steps: ${optim.max_updates}
+    max_lr: ${optim.max_lr}
+    anneal_strategy: linear

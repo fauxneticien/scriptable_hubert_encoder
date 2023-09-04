@@ -54,7 +54,10 @@ def _init_hubert_pretrain_model(module):
         torch.nn.init.xavier_uniform_(module.v_proj.weight, gain=1 / math.sqrt(2))
         torch.nn.init.xavier_uniform_(module.q_proj.weight, gain=1 / math.sqrt(2))
         torch.nn.init.xavier_uniform_(module.out_proj.weight)
-        torch.nn.init.constant_(module.out_proj.bias, 0.0)
+
+        if module.out_proj.bias is not None:
+            torch.nn.init.constant_(module.out_proj.bias, 0.0)
+            
     elif isinstance(module, Transformer):
         module.apply(_init_transformer_params)
     else:
@@ -169,6 +172,8 @@ class SelfAttention(Module):
         embed_dim: int,
         num_heads: int,
         dropout: float = 0.0,
+        qkv_bias: bool = True,
+        use_bias: bool = True
     ):
         super().__init__()
         head_dim = embed_dim // num_heads
@@ -182,10 +187,10 @@ class SelfAttention(Module):
 
         self.scaling = self.head_dim**-0.5
 
-        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=True)
-        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=True)
-        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=True)
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=use_bias)
 
     def forward(
         self,
@@ -284,11 +289,12 @@ class FeedForward(Module):
         intermediate_features: int,
         intermediate_dropout: float,
         output_dropout: float,
+        use_bias: float
     ):
         super().__init__()
-        self.intermediate_dense = nn.Linear(io_features, intermediate_features)
+        self.intermediate_dense = nn.Linear(io_features, intermediate_features, bias=use_bias)
         self.intermediate_dropout = nn.Dropout(intermediate_dropout)
-        self.output_dense = nn.Linear(intermediate_features, io_features)
+        self.output_dense = nn.Linear(intermediate_features, io_features, bias=use_bias)
         self.output_dropout = nn.Dropout(output_dropout)
 
     def forward(self, x):
@@ -438,6 +444,9 @@ def _get_encoder(
     dropout: float,
     layer_norm_first: bool,
     layer_drop: float,
+    attention_qkv_bias: bool,
+    attention_use_bias: bool,
+    ff_use_bias: bool
 ) -> Encoder:
 
     feature_projection = FeatureProjection(in_features, embed_dim, dropout_input)
@@ -451,12 +460,15 @@ def _get_encoder(
             embed_dim=embed_dim,
             num_heads=num_heads,
             dropout=attention_dropout,
+            qkv_bias=attention_qkv_bias,
+            use_bias=attention_use_bias
         )
         feed_forward = FeedForward(
             io_features=embed_dim,
             intermediate_features=ff_interm_features,
             intermediate_dropout=ff_interm_dropout,
             output_dropout=dropout,
+            use_bias=ff_use_bias
         )
         encoder_layers.append(
             EncoderLayer(

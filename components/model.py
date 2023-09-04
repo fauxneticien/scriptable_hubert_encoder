@@ -1,6 +1,16 @@
 import torch
 
 from . import verbatim_torchaudio as vta
+from . import scriptable as sta
+
+class ScriptableTorchAudioEncoder(torch.nn.Module):
+    def __init__(self, **encoder_kwargs):
+        super().__init__()
+        self.encoder = sta._get_encoder(**encoder_kwargs)
+        self.encoder.apply(sta._init_hubert_pretrain_model)
+
+    def forward(self, feats_padded, feat_lens):
+        return self.encoder(feats_padded, feat_lens)
 
 class VanillaTorchAudioEncoder(torch.nn.Module):
     def __init__(self, **encoder_kwargs):
