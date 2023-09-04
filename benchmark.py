@@ -1,11 +1,17 @@
 import hydra
 import os
+import warnings
 
-import numpy as np
+import pandas as pd
 
 from omegaconf import DictConfig
 from components._helpers import HuBERTModelForBenchmarking
-from tqdm import tqdm
+
+# Ignore non-relevant warnings
+warnings.filterwarnings("ignore", message="Applied workaround for CuDNN issue")
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 @hydra.main(version_base="1.3", config_path="./config", config_name="default")
 def benchmark(cfg: DictConfig) -> None:
@@ -13,32 +19,16 @@ def benchmark(cfg: DictConfig) -> None:
     for (name, value) in cfg.env.items():
         os.environ[name] = value
 
-    data = hydra.utils.instantiate(cfg.data)
+    model = HuBERTModelForBenchmarking(cfg)
 
-    model = HuBERTModelForBenchmarking(
-        encoder = hydra.utils.instantiate(cfg.encoder),
-        masking_config = cfg.masking
-    )
+    print(f"{cfg.encoder._target_}: {count_parameters(model):,} parameters")
 
-    total_iters = cfg.num_iters + cfg.warmup_iters
+    stats = model.benchmark()
+    stats_df = pd.DataFrame(stats)
 
-    throughput_stats=[]
-
-    for i, batch in (pbar := tqdm(enumerate(data.train_loader), desc="Running warmup", total = total_iters)):
-
-        if i == total_iters:
-            break
-
-        _, throughput = model(batch)
-
-        if i == cfg.warmup_iters:
-            pbar.set_description("Benchmarking throughput")
-
-        if i >= cfg.warmup_iters:
-            throughput_stats.append(throughput)
-
-    # Calculate average without first warm-up step
-    print(f"Throughput (data samples per second): {np.mean(throughput_stats):.2f}")
+    print(f"Throughput (forward+backward): {(stats_df.n_samples / (stats_df.forward + stats_df.backward)).mean():.2f} samples/s")
+    print(f"Forward time in seconds, mean (std): {stats_df.forward.mean():.2f} ({stats_df.forward.std():.2f})")
+    print(f"Backward time in seconds, mean (std): {stats_df.backward.mean():.2f} ({stats_df.backward.std():.2f})")
 
 if __name__ == "__main__":
     benchmark()
