@@ -1,6 +1,7 @@
 import hydra
-import time
 import torch
+
+import pandas as pd
 
 from pathlib import Path
 from lhotse import CutSet
@@ -62,7 +63,11 @@ class HuBERTModelForBenchmarking(torch.nn.Module):
         self.final_proj.to('cuda')
         self.loss.to('cuda')
 
-    def forward(self, batch, skip_mask=False, skip_nomask=True):
+        self.start_events = [ torch.cuda.Event(enable_timing=True) for _ in range(self.cfg.num_iters) ]
+        self.forward_end_events = [ torch.cuda.Event(enable_timing=True) for _ in range(self.cfg.num_iters) ]
+        self.backward_end_events = [ torch.cuda.Event(enable_timing=True) for _ in range(self.cfg.num_iters) ]
+
+    def forward(self, batch, benchmark_iteration, skip_mask=False, skip_nomask=True):
 
         B, T, C = batch['feats_padded'].shape
 
@@ -74,7 +79,9 @@ class HuBERTModelForBenchmarking(torch.nn.Module):
 
         self.optimizer.zero_grad()
 
-        start = time.time()
+        if benchmark_iteration >= 0:
+            self.start_events[benchmark_iteration].record()
+
         transformer_outputs = self.encoder(
             batch['feats_padded'].to('cuda'),
             batch['feat_lens'].to('cuda')
@@ -83,19 +90,21 @@ class HuBERTModelForBenchmarking(torch.nn.Module):
         mask_m = torch.logical_and(~padding_mask, masks_for_modeling)
         logits_m = self.final_proj(transformer_outputs[mask_m]) if not skip_mask else None
         logits_u = self.final_proj(transformer_outputs[~mask_m]) if not skip_nomask else None
-        forward_end=time.time()
+        
+        if benchmark_iteration >= 0:
+            self.forward_end_events[benchmark_iteration].record()
 
         loss = self.loss(logits_m, logits_u, masks_for_modeling, batch["ptlabels_padded"].to('cuda'))
         loss.backward()
-        backward_end=time.time()
+
+        if benchmark_iteration >= 0:
+            self.backward_end_events[benchmark_iteration].record()
 
         self.optimizer.step()
         self.scheduler.step()
 
         return {
-            'n_samples': B,
-            'forward': forward_end-start,
-            'backward': backward_end-forward_end
+            'n_samples': B
         }
 
     def benchmark(self):
@@ -111,7 +120,7 @@ class HuBERTModelForBenchmarking(torch.nn.Module):
             if i == total_iters:
                 break
 
-            iter_stats = self.forward(batch)
+            iter_stats = self.forward(batch, i - self.cfg.warmup_iters)
 
             if i == self.cfg.warmup_iters:
                 pbar.set_description("Benchmarking throughput")
@@ -119,4 +128,10 @@ class HuBERTModelForBenchmarking(torch.nn.Module):
             if i >= self.cfg.warmup_iters:
                 throughput_stats.append(iter_stats)
 
-        return throughput_stats
+        torch.cuda.synchronize()
+
+        stats_df = pd.DataFrame(throughput_stats)
+        stats_df['forward_ms'] = [ s.elapsed_time(e) for s, e in zip(self.start_events, self.forward_end_events) ]
+        stats_df['backward_ms'] = [ s.elapsed_time(e) for s, e in zip(self.forward_end_events, self.backward_end_events) ]
+
+        return stats_df
