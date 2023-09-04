@@ -35,5 +35,9 @@ bash setup-local-conda.sh
 # Run benchmark
 
 ```
+# Default
 python benchmark.py
+
+# Some config in config/encoder
+python benchmark.py encoder=crammed
 ```
